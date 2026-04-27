@@ -15,7 +15,7 @@ Add a new column enumerating the lines of a CSV file. This can be useful to keep
 track of a specific line order, give a unique identifier to each line or even
 make a copy of the contents of a column.
 
-The enum function has four modes of operation:
+The enum function has six modes of operation:
 
 1. INCREMENT. Add an incremental identifier to each of the lines:
 ```console
@@ -35,19 +35,19 @@ $ qsv enum --uuid7 file.csv
 ```
 
 
-3. CONSTANT. Create a new column filled with a given value:
+4. CONSTANT. Create a new column filled with a given value:
 ```console
 $ qsv enum --constant 0
 ```
 
 
-4. COPY. Copy the contents of a column to a new one:
+5. COPY. Copy the contents of a column to a new one:
 ```console
 $ qsv enum --copy names
 ```
 
 
-5. HASH. Create a new column with the deterministic hash of the given column/s.
+6. HASH. Create a new column with the deterministic hash of the given column/s.
 The hash uses the xxHash algorithm and is platform-agnostic.
 (see <https://github.com/DoumanAsh/xxhash-rust> for more information):
 ```console
