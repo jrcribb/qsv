@@ -156,6 +156,25 @@ fn headers_trim() {
 }
 
 #[test]
+fn headers_trim_tabs() {
+    let wrk = Workdir::new("headers_trim_tabs");
+
+    // headers with leading/trailing tabs and spaces (unquoted to avoid
+    // post-quote whitespace-handling quirks in CSV parsers)
+    wrk.create_from_string("data.csv", "\ta\t, b ,\tc \nx,y,z\n");
+
+    let mut cmd = wrk.command("headers");
+    cmd.arg("--trim").arg("data.csv");
+
+    let got: String = wrk.stdout(&mut cmd);
+    let expected = "\
+1   a
+2   b
+3   c";
+    assert_eq!(got, expected);
+}
+
+#[test]
 fn headers_multiple() {
     let (wrk, mut cmd) = setup("headers_multiple");
     cmd.arg("in2.csv");
@@ -180,9 +199,9 @@ fn headers_multiple_just_count() {
 }
 
 #[test]
-fn headers_intersect() {
-    let (wrk, mut cmd) = setup("headers_intersect");
-    cmd.arg("in2.csv").arg("--intersect");
+fn headers_union() {
+    let (wrk, mut cmd) = setup("headers_union");
+    cmd.arg("in2.csv").arg("--union");
 
     let got: String = wrk.stdout(&mut cmd);
     let expected = "\
@@ -233,8 +252,8 @@ fn headers_infile() {
 }
 
 #[test]
-fn headers_intersect_infile() {
-    let wrk = Workdir::new("headers_intersect_infile");
+fn headers_union_infile() {
+    let wrk = Workdir::new("headers_union_infile");
     wrk.create("in1.csv", vec![svec!["a", "b", "c"], svec!["1", "2", "3"]]);
 
     wrk.create("in2.csv", vec![svec!["c", "d", "e"], svec!["3", "1", "2"]]);
@@ -247,7 +266,7 @@ fn headers_intersect_infile() {
     wrk.create_from_string("testdata.infile-list", "in1.csv\nin2.csv\nin3.csv\n");
 
     let mut cmd = wrk.command("headers");
-    cmd.arg("--intersect").arg("testdata.infile-list");
+    cmd.arg("--union").arg("testdata.infile-list");
 
     let got: Vec<Vec<String>> = wrk.read_stdout(&mut cmd);
     let expected = vec![["a"], ["b"], ["c"], ["d"], ["e"], ["f"], ["g"]];

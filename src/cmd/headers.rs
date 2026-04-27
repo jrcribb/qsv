@@ -5,7 +5,7 @@ These names can be used in commands like 'select' to refer to columns in the
 CSV data.
 
 Note that multiple CSV files may be given to this command. This is useful with
-the --intersect flag.
+the --union flag.
 
 For examples, see https://github.com/dathere/qsv/blob/master/tests/test_headers.rs.
 
@@ -27,9 +27,10 @@ headers options:
                            This is automatically enabled if more than one
                            input is given.
     -J, --just-count       Only show the number of headers.
-    --intersect            Shows the intersection of all headers in all of
-                           the inputs given.
-    --trim                 Trim space & quote characters from header name.
+    --union                Shows the union of headers across all inputs
+                           (deduplicated).
+    --trim                 Trim leading/trailing space, tab, and quote
+                           characters from header name.
 
 Common options:
     -h, --help             Display this message
@@ -49,7 +50,7 @@ struct Args {
     arg_input:       Vec<PathBuf>,
     flag_just_names: bool,
     flag_just_count: bool,
-    flag_intersect:  bool,
+    flag_union:      bool,
     flag_trim:       bool,
     flag_delimiter:  Option<Delimiter>,
 }
@@ -67,11 +68,14 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
     let configs = util::many_configs(&args.arg_input, args.flag_delimiter, true, false)?;
 
     let num_inputs = configs.len();
+    if num_inputs > 1 {
+        args.flag_just_names = true;
+    }
     let mut headers: Vec<Vec<u8>> = vec![];
     for conf in configs {
         let mut rdr = conf.reader()?;
         for header in rdr.byte_headers()? {
-            if !args.flag_intersect || !headers.iter().any(|h| &**h == header) {
+            if !args.flag_union || !headers.iter().any(|h| h.as_slice() == header) {
                 headers.push(header.to_vec());
             }
         }
@@ -86,15 +90,18 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
         writeln!(wtr, "{}", headers.len())?;
     } else {
         for (i, header) in headers.iter().enumerate() {
-            if num_inputs == 1 && !args.flag_just_names {
+            if !args.flag_just_names {
                 write!(&mut wtr, "{}\t", i + 1)?;
             }
             if args.flag_trim {
-                wtr.write_all(
-                    std::string::String::from_utf8_lossy(header)
-                        .trim_matches(|c| c == '"' || c == ' ')
-                        .as_bytes(),
-                )?;
+                let mut h: &[u8] = header;
+                while matches!(h.first(), Some(b'"' | b' ' | b'\t')) {
+                    h = &h[1..];
+                }
+                while matches!(h.last(), Some(b'"' | b' ' | b'\t')) {
+                    h = &h[..h.len() - 1];
+                }
+                wtr.write_all(h)?;
             } else {
                 wtr.write_all(header)?;
             }
