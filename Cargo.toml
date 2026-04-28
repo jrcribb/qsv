@@ -350,7 +350,7 @@ json-objects-to-csv = { git = "https://github.com/jqnatividad/json-objects-to-cs
 kiddo = { git = "https://github.com/sdd/kiddo", rev = "2056051"}
 
 # use latest upstream now that our PR has been merged while awaiting a new release 
-self_update = { git = "https://github.com/jaemk/self_update", rev = "17af1e9" }
+self_update = { git = "https://github.com/jaemk/self_update", rev = "cad8bb9" }
 
 # use our patched fork of sled to get rid of unmaintained instant
 sled = { git = "https://github.com/dathere/sled", branch = "v0.34.7-bumped-parking_lot_to_0.12" }

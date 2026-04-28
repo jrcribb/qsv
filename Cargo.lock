@@ -7288,7 +7288,7 @@ checksum = "b12e76d157a900eb52e81bc6e9f3069344290341720e9178cde2407113ac8d89"
 [[package]]
 name = "self_update"
 version = "0.44.0"
-source = "git+https://github.com/jaemk/self_update?rev=17af1e9#17af1e981e43f561232e0bf2735c431a1739f0b5"
+source = "git+https://github.com/jaemk/self_update?rev=cad8bb9#cad8bb9c5efa64ff9131c424bcd20c84463b32f2"
 dependencies = [
  "http 1.4.0",
  "indicatif",
