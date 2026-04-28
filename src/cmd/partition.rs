@@ -160,7 +160,7 @@ impl Args {
     }
 
     /// A basic sequential partition with optional batching for file limit.
-    fn sequential_partition(&mut self) -> CliResult<()> {
+    fn sequential_partition(self) -> CliResult<()> {
         let rconfig = self.rconfig();
         let mut rdr = rconfig.reader()?;
         let headers = rdr.byte_headers()?.clone();

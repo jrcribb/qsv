@@ -214,14 +214,15 @@ impl Config {
 
                 // if QSV_SKIP_FORMAT_CHECK is set or path is a temp file, we skip format check
                 let temp_dir = crate::config::TEMP_FILE_DIR.get_or_init(|| {
-                    tempfile::TempDir::new()
-                        .map(tempfile::TempDir::keep)
-                        .unwrap_or_else(|e| {
+                    tempfile::TempDir::new().map_or_else(
+                        |e| {
                             warn!(
                                 "failed to create temp dir: {e}; falling back to system temp dir"
                             );
                             env::temp_dir()
-                        })
+                        },
+                        tempfile::TempDir::keep,
+                    )
                 });
                 skip_format_check = sniff
                     || util::get_envvar_flag("QSV_SKIP_FORMAT_CHECK")
