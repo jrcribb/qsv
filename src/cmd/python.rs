@@ -400,7 +400,7 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
 
             let error_result = intern!(py, "<ERROR>");
 
-            for record in batch.iter_mut() {
+            for record in &mut batch {
                 row_number += 1;
 
                 // Tolerate jagged rows: short records yield "" via unwrap_or_default,

@@ -555,16 +555,17 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
     };
     let literal_url_used = literal_url.starts_with("http");
 
-    let mut column_index = 0;
-    if !literal_url_used {
+    let column_index = if literal_url_used {
+        0
+    } else {
         rconfig = rconfig.select(args.arg_url_column);
         let sel = rconfig.selection(&headers)?;
         if sel.len() != 1 {
             return fail!("Only a single URL column may be selected.");
         }
         // safety: sel.len() == 1 verified above
-        column_index = *sel.iter().next().unwrap();
-    }
+        *sel.iter().next().unwrap()
+    };
 
     let rate_limit = match args.flag_rate_limit {
         // safety: u32::MAX is non-zero
@@ -1208,6 +1209,7 @@ fn get_cached_response(
 // call site so the format cannot drift (the original cache-eviction bug came
 // from a divergence between these).
 #[inline]
+#[allow(clippy::fn_params_excessive_bools)]
 fn cross_session_cache_key(
     url: &str,
     form_body_jsonmap: &serde_json::Map<String, Value>,
@@ -1219,15 +1221,8 @@ fn cross_session_cache_key(
     include_existing_columns: bool,
 ) -> String {
     format!(
-        "{}{:?}{}{:?}{}{}{}{}",
-        url,
-        form_body_jsonmap,
-        payload_content_type,
-        flag_jaq,
-        flag_store_error,
-        flag_pretty,
-        flag_compress,
-        include_existing_columns
+        "{url}{form_body_jsonmap:?}{payload_content_type}{flag_jaq:?\
+         }{flag_store_error}{flag_pretty}{flag_compress}{include_existing_columns}"
     )
 }
 

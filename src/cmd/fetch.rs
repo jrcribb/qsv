@@ -559,16 +559,17 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
         false
     };
 
-    let mut column_index = 0_usize;
-    if args.flag_url_template.is_none() {
+    let column_index = if args.flag_url_template.is_none() {
         rconfig = rconfig.select(args.arg_url_column);
         let sel = rconfig.selection(&headers)?;
         if sel.len() != 1 {
             return fail!("Only a single URL column may be selected.");
         }
         // safety: sel.len() == 1 verified above
-        column_index = *sel.iter().next().unwrap();
-    }
+        *sel.iter().next().unwrap()
+    } else {
+        0_usize
+    };
 
     let mut dynfmt_url_template = String::new();
     if let Some(ref url_template) = args.flag_url_template {
@@ -1115,10 +1116,7 @@ fn cross_session_cache_key(
     flag_pretty: bool,
     include_existing_columns: bool,
 ) -> String {
-    format!(
-        "{}{:?}{}{}{}",
-        url, flag_jaq, flag_store_error, flag_pretty, include_existing_columns
-    )
+    format!("{url}{flag_jaq:?}{flag_store_error}{flag_pretty}{include_existing_columns}")
 }
 
 // this is a disk cache that can be used across qsv sessions

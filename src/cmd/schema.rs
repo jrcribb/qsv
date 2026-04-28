@@ -612,7 +612,7 @@ impl EnvVarGuard {
     fn set(key: &'static str, value: &str) -> Self {
         let lock = ENV_VAR_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var_os(key);
         // safety: ENV_VAR_LOCK is held for the entire lifetime of this guard,
         // serializing the set/restore against any other EnvVarGuard user.

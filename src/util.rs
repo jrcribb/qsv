@@ -2662,7 +2662,7 @@ pub fn write_json(
             } else {
                 write!(&mut json_wtr, ",")?;
             }
-            write!(&mut json_wtr, r#""{key}":{value}"#, value = temp_val)?;
+            write!(&mut json_wtr, r#""{key}":{temp_val}"#)?;
         }
         write!(json_wtr, "}}")?;
     }

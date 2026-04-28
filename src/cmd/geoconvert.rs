@@ -213,7 +213,7 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
     let args: Args = util::get_args(USAGE, argv)?;
 
     let max_length = args.flag_max_length;
-    if let Some(0) = max_length {
+    if max_length == Some(0) {
         return fail_incorrectusage_clierror!("--max-length must be greater than 0.");
     }
 
