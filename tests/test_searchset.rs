@@ -129,6 +129,135 @@ fn searchset_indexed_parallel() {
 }
 
 #[test]
+fn searchset_indexed_parallel_quick() {
+    // regression: parallel --quick must report the same earliest-match row
+    // as sequential and produce no stdout
+    let wrk = Workdir::new("searchset_indexed_parallel_quick");
+    let data = wrk.load_test_resource("boston311-100.csv");
+    wrk.create_from_string("data.csv", &data);
+    wrk.create_from_string("regexset.txt", "Brighton\nMission Hill");
+
+    // index the file
+    let mut idx_cmd = wrk.command("index");
+    idx_cmd.arg("data.csv");
+    wrk.assert_success(&mut idx_cmd);
+
+    // sequential baseline (--jobs 1 routes to sequential_search)
+    let mut seq_cmd = wrk.command("searchset");
+    seq_cmd
+        .arg("regexset.txt")
+        .arg("--quick")
+        .arg("--jobs")
+        .arg("1")
+        .arg("data.csv");
+    let seq_err = wrk.output_stderr(&mut seq_cmd);
+    wrk.assert_success(&mut seq_cmd);
+
+    // parallel run
+    let mut par_cmd = wrk.command("searchset");
+    par_cmd
+        .arg("regexset.txt")
+        .arg("--quick")
+        .arg("--jobs")
+        .arg("4")
+        .arg("data.csv");
+    let par_err = wrk.output_stderr(&mut par_cmd);
+    wrk.assert_success(&mut par_cmd);
+
+    // Same earliest-match row regardless of parallelism
+    assert_eq!(seq_err, par_err);
+    assert!(!seq_err.trim().is_empty());
+
+    // --quick produces no stdout
+    let par_out: String = wrk.stdout(&mut par_cmd);
+    assert_eq!(par_out, "");
+}
+
+#[test]
+fn searchset_indexed_parallel_quick_json() {
+    // regression: per USAGE, searchset's --quick is "Ignored if --json is
+    // enabled" - --json must scan all records and print the full JSON summary
+    // to stderr, NOT exit early on first match.
+    let wrk = Workdir::new("searchset_indexed_parallel_quick_json");
+    let data = wrk.load_test_resource("boston311-100.csv");
+    wrk.create_from_string("data.csv", &data);
+    wrk.create_from_string("regexset.txt", "Brighton\nMission Hill");
+
+    // index the file
+    let mut idx_cmd = wrk.command("index");
+    idx_cmd.arg("data.csv");
+    wrk.assert_success(&mut idx_cmd);
+
+    // parallel run: --quick + --json must NOT short-circuit
+    let mut cmd = wrk.command("searchset");
+    cmd.arg("regexset.txt")
+        .arg("--quick")
+        .arg("--json")
+        .arg("--jobs")
+        .arg("4")
+        .arg("data.csv");
+    let stderr = wrk.output_stderr(&mut cmd);
+    wrk.assert_success(&mut cmd);
+
+    // stderr must be a JSON summary, not a single row number
+    let json: serde_json::Value = serde_json::from_str(stderr.trim())
+        .expect("stderr should be a JSON summary when --json is set");
+    // record_count reflects full scan (boston311-100.csv has 100 records);
+    // assert > 1 to prove --quick did not exit on the first match.
+    let record_count = json["record_count"].as_u64().expect("record_count");
+    assert!(
+        record_count > 1,
+        "record_count should reflect a full scan, got {record_count}"
+    );
+    // rows_with_matches > 1 also proves we didn't break on first match
+    let rows_with_matches = json["rows_with_matches"]
+        .as_u64()
+        .expect("rows_with_matches");
+    assert!(
+        rows_with_matches > 1,
+        "rows_with_matches should be > 1 (--quick is ignored under --json), got \
+         {rows_with_matches}"
+    );
+}
+
+#[test]
+fn searchset_indexed_parallel_invert_match() {
+    // covers: the parallel filter-mode optimization that drops non-matched
+    // rows in workers must still produce identical output to sequential mode
+    // when --invert-match flips the meaning of "matched"
+    let wrk = Workdir::new("searchset_indexed_parallel_invert_match");
+    let data = wrk.load_test_resource("boston311-100.csv");
+    wrk.create_from_string("data.csv", &data);
+    wrk.create_from_string("regexset.txt", "Brighton\nMission Hill");
+
+    // sequential baseline (no index yet)
+    let mut seq_cmd = wrk.command("searchset");
+    seq_cmd
+        .arg("regexset.txt")
+        .arg("--invert-match")
+        .arg("data.csv");
+    let seq_out: String = wrk.stdout(&mut seq_cmd);
+    wrk.assert_success(&mut seq_cmd);
+
+    // index and run in parallel
+    let mut idx_cmd = wrk.command("index");
+    idx_cmd.arg("data.csv");
+    wrk.assert_success(&mut idx_cmd);
+
+    let mut par_cmd = wrk.command("searchset");
+    par_cmd
+        .arg("regexset.txt")
+        .arg("--invert-match")
+        .arg("--jobs")
+        .arg("4")
+        .arg("data.csv");
+    let par_out: String = wrk.stdout(&mut par_cmd);
+    wrk.assert_success(&mut par_cmd);
+
+    assert_eq!(seq_out, par_out);
+}
+
+#[test]
 fn searchset_match() {
     let wrk = Workdir::new("searchset_match");
     wrk.create("data.csv", data(true));

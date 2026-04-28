@@ -220,6 +220,108 @@ fn search_match_quick() {
 }
 
 #[test]
+fn search_match_quick_json() {
+    // regression: --quick + --json must not emit an unclosed JSON array `[`,
+    // and per USAGE --json "Automatically sets --quiet" so the --quick row
+    // number must NOT be printed to stderr either.
+    let wrk = Workdir::new("search_match_quick_json");
+    wrk.create("data.csv", data(true));
+    let mut cmd = wrk.command("search");
+    cmd.arg("^a").arg("--quick").arg("--json").arg("data.csv");
+
+    // Workdir::output_stderr returns the literal "No error" sentinel when
+    // stderr is empty and the command succeeded.
+    let got_err = wrk.output_stderr(&mut cmd);
+    assert_eq!(
+        got_err, "No error",
+        "--quick --json should silence stderr (--json implies --quiet); got: {got_err:?}"
+    );
+    wrk.assert_success(&mut cmd);
+    let got: String = wrk.stdout(&mut cmd);
+    assert_eq!(got, "");
+}
+
+#[test]
+fn search_indexed_parallel_quick() {
+    // regression: parallel --quick must report the same earliest-match row
+    // as sequential search and produce no stdout
+    let wrk = Workdir::new("search_indexed_parallel_quick");
+    let data = wrk.load_test_resource("boston311-100.csv");
+    wrk.create_from_string("data.csv", &data);
+
+    // index the file
+    let mut idx_cmd = wrk.command("index");
+    idx_cmd.arg("data.csv");
+    wrk.assert_success(&mut idx_cmd);
+
+    // sequential baseline (--jobs 1 routes to sequential_search)
+    let mut seq_cmd = wrk.command("search");
+    seq_cmd
+        .arg("Charlestown")
+        .arg("--quick")
+        .arg("--jobs")
+        .arg("1")
+        .arg("data.csv");
+    let seq_err = wrk.output_stderr(&mut seq_cmd);
+    wrk.assert_success(&mut seq_cmd);
+
+    // parallel run
+    let mut par_cmd = wrk.command("search");
+    par_cmd
+        .arg("Charlestown")
+        .arg("--quick")
+        .arg("--jobs")
+        .arg("4")
+        .arg("data.csv");
+    let par_err = wrk.output_stderr(&mut par_cmd);
+    wrk.assert_success(&mut par_cmd);
+
+    // Same earliest-match row regardless of parallelism
+    assert_eq!(seq_err, par_err);
+    assert!(!seq_err.trim().is_empty());
+
+    // --quick produces no stdout
+    let par_out: String = wrk.stdout(&mut par_cmd);
+    assert_eq!(par_out, "");
+}
+
+#[test]
+fn search_indexed_parallel_invert_match() {
+    // covers: the parallel filter-mode optimization that drops non-matched
+    // rows in workers must still produce identical output to sequential mode
+    // when --invert-match flips the meaning of "matched"
+    let wrk = Workdir::new("search_indexed_parallel_invert_match");
+    let data = wrk.load_test_resource("boston311-100.csv");
+    wrk.create_from_string("data.csv", &data);
+
+    // sequential baseline (no index yet)
+    let mut seq_cmd = wrk.command("search");
+    seq_cmd
+        .arg("Charlestown")
+        .arg("--invert-match")
+        .arg("data.csv");
+    let seq_out: String = wrk.stdout(&mut seq_cmd);
+    wrk.assert_success(&mut seq_cmd);
+
+    // index and run in parallel
+    let mut idx_cmd = wrk.command("index");
+    idx_cmd.arg("data.csv");
+    wrk.assert_success(&mut idx_cmd);
+
+    let mut par_cmd = wrk.command("search");
+    par_cmd
+        .arg("Charlestown")
+        .arg("--invert-match")
+        .arg("--jobs")
+        .arg("4")
+        .arg("data.csv");
+    let par_out: String = wrk.stdout(&mut par_cmd);
+    wrk.assert_success(&mut par_cmd);
+
+    assert_eq!(seq_out, par_out);
+}
+
+#[test]
 fn search_nomatch() {
     let wrk = Workdir::new("search_nomatch");
     wrk.create("data.csv", data(true));
