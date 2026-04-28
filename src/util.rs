@@ -1576,7 +1576,9 @@ pub fn safe_header_names(
     // column names. Fold to lowercase if keep_case is false. Trim leading & trailing whitespace.
     // Replace whitespace/non-alphanumeric) with _. If name starts with a number & check_first_char
     // is true, prepend the unsafe_prefix. If a column with the same name already exists,
-    // append a sequence suffix (e.g. _n). Names are limited to 60 characters in length.
+    // append a sequence suffix (e.g. _n). Names are limited to 60 BYTES in length (snapped to
+    // a UTF-8 char boundary), matching `is_safe_name`'s byte check and staying within
+    // Postgres' default NAMEDATALEN of 63 bytes — including any disambiguation suffix.
     // Empty names are replaced with unsafe_prefix as well.
 
     // If conditional = true & reserved_names is none, only rename the header if its not safe
@@ -1634,28 +1636,49 @@ pub fn safe_header_names(
                 safename_always
             };
 
-            final_candidate = safename_candidate[..safename_candidate
-                .chars()
-                .map(char::len_utf8)
-                .take(60)
-                .sum()]
-                .to_string();
-
+            // Apply lowercase and the "_<prefix>" prepend BEFORE truncation —
+            // case-folding can change byte length (e.g. some Unicode glyphs
+            // expand on lowercase) and prepending the prefix adds bytes too,
+            // so doing them post-truncation could push the final name past
+            // the 60-byte budget. Order: lowercase → leading-_ prefix → byte
+            // truncate at a char boundary.
             final_candidate = if keep_case {
-                final_candidate
+                safename_candidate
             } else {
-                final_candidate.to_lowercase()
+                safename_candidate.to_lowercase()
             };
-
             if prefix != "_" && final_candidate.starts_with('_') {
                 final_candidate = format!("{prefix}{final_candidate}");
+            }
+            if final_candidate.len() > 60 {
+                final_candidate.truncate(final_candidate.floor_char_boundary(60));
             }
             final_candidate
         };
         let mut sequence_suffix = 2_u16;
         let mut candidate_name = safe_name.clone();
         while name_vec.contains(&candidate_name) {
-            candidate_name = format!("{safe_name}_{sequence_suffix}");
+            // Trim the base so that base + "_<n>" stays within the 60-byte
+            // limit; otherwise the pre-truncated `safe_name` plus suffix could
+            // overflow (e.g. safe_name=60 bytes + "_2" → 62 bytes), pushing
+            // past Postgres' default NAMEDATALEN of 63 bytes and out of sync
+            // with `is_safe_name`'s byte-based length check. We measure in
+            // bytes (not chars) and snap to a UTF-8 char boundary so non-ASCII
+            // headers can't smuggle in a 240-byte name behind a 60-char count.
+            // Note: when two distinct long source headers share the same
+            // first `base_max` bytes, they'll share the suffix counter — i.e.
+            // the second header's first occurrence may be `_3` rather than
+            // `_2`. This is intentional: the trimmed prefix is the actual
+            // identifier downstream consumers see, so collisions in that
+            // namespace must be disambiguated, not the original header's.
+            let suffix = format!("_{sequence_suffix}");
+            let base_max = 60_usize.saturating_sub(suffix.len());
+            let base = if safe_name.len() > base_max {
+                &safe_name[..safe_name.floor_char_boundary(base_max)]
+            } else {
+                safe_name.as_str()
+            };
+            candidate_name = format!("{base}{suffix}");
             sequence_suffix += 1;
         }
         if candidate_name.ne(header_name) {

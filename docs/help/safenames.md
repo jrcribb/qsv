@@ -17,7 +17,8 @@ Modify headers of a CSV to only have "safe" names - guaranteed "database-ready" 
 Fold to lowercase. Trim leading & trailing whitespaces. Replace whitespace/non-alphanumeric
 characters with _. If name starts with a number & check_first_char is true, prepend the unsafe prefix.
 If a header with the same name already exists, append a sequence suffix (e.g. col, col_2, col_3).
-Names are limited to 60 characters in length. Empty names are replaced with the unsafe prefix.
+Names are limited to 60 bytes in length (snapped to UTF-8 char boundary, including any
+duplicate-disambiguation suffix). Empty names are replaced with the unsafe prefix.
 
 In addition, specifically because of CKAN Datastore requirements:
 - Headers with leading underscores are replaced with "unsafe_" prefix.
@@ -98,7 +99,7 @@ qsv safenames --help
 
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Option&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Type | Description | Default |
 |--------|------|-------------|--------|
-| &nbsp;`‑‑mode`&nbsp; | string | Rename header names to "safe" names - i.e. guaranteed "database-ready" names. It has six modes - conditional, always, verify, Verbose, with Verbose having two submodes - JSON & pretty JSON. | `Always` |
+| &nbsp;`‑‑mode`&nbsp; | string | Rename header names to "safe" names — guaranteed "database-ready" names. Mode is selected by the FIRST character: c/C conditional, a/A always, v verify, V Verbose, j JSON, J pretty JSON (case matters for v vs V and j vs J; --mode verbose maps to 'v', NOT V). | `Always` |
 | &nbsp;`‑‑reserved`&nbsp; | string | Comma-delimited list of additional case-insensitive reserved names that should be considered "unsafe." If a header name is found in the reserved list, it will be prefixed with "reserved_". | `_id` |
 | &nbsp;`‑‑prefix`&nbsp; | string | Certain systems do not allow header names to start with "_" (e.g. CKAN Datastore). This option allows the specification of the unsafe prefix to use when a header starts with "_". | `unsafe_` |
 

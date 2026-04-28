@@ -5,7 +5,8 @@ Modify headers of a CSV to only have "safe" names - guaranteed "database-ready" 
 Fold to lowercase. Trim leading & trailing whitespaces. Replace whitespace/non-alphanumeric
 characters with _. If name starts with a number & check_first_char is true, prepend the unsafe prefix.
 If a header with the same name already exists, append a sequence suffix (e.g. col, col_2, col_3).
-Names are limited to 60 characters in length. Empty names are replaced with the unsafe prefix.
+Names are limited to 60 bytes in length (snapped to UTF-8 char boundary, including any
+duplicate-disambiguation suffix). Empty names are replaced with the unsafe prefix.
 
 In addition, specifically because of CKAN Datastore requirements:
 - Headers with leading underscores are replaced with "unsafe_" prefix.
@@ -63,24 +64,24 @@ Usage:
     qsv safenames --help
 
 safenames options:
-    --mode <c|a|v|V|j|J>   Rename header names to "safe" names - i.e.
-                           guaranteed "database-ready" names.
-                           It has six modes - conditional, always, verify, Verbose,
-                           with Verbose having two submodes - JSON & pretty JSON.
-
-                           conditional (c) - check first before renaming and allow
-                           "quoted identifiers" - mixed case with embedded spaces.
-                           always (a) - goes ahead and renames all headers
-                           without checking if they're already "safe".
-
-                           verify (v) - count "unsafe" header names without
-                           modifying them. Note that verify does not count
-                           "quoted identifiers" as unsafe.
-                           verbose (V) - like verify, but verbose, showing
-                           total header count, duplicates, unsafe headers & safe headers.
-
-                           JSON (j) - similar to verbose in minified JSON.
-                           pretty JSON (J) - verbose in pretty-printed JSON
+    --mode <mode>          Rename header names to "safe" names — guaranteed
+                           "database-ready" names. Mode is selected by the FIRST
+                           character: c/C conditional, a/A always, v verify,
+                           V Verbose, j JSON, J pretty JSON (case matters for
+                           v vs V and j vs J; --mode verbose maps to 'v', NOT V).
+                           Mode details:
+                             c, C  - conditional. Check first before renaming;
+                                     preserves "quoted identifiers" (mixed case
+                                     with embedded spaces).
+                             a, A  - always. Rename every header, even safe ones.
+                             v     - verify. Count unsafe headers; result to stderr.
+                             V     - Verbose. Like verify, but also lists header
+                                     count, duplicates, unsafe & safe headers.
+                             j     - JSON. Verbose data as minified JSON to stdout.
+                             J     - Pretty JSON. Verbose data as pretty-printed JSON.
+                           Quoted identifiers are only treated as safe in
+                           conditional mode; verify, Verbose, and the JSON modes
+                           flag them as unsafe.
                            [default: Always]
     --reserved <list>      Comma-delimited list of additional case-insensitive reserved names
                            that should be considered "unsafe." If a header name is found in 
@@ -99,7 +100,7 @@ Common options:
                            Must be a single character. (default: ,)
 "#;
 
-use foldhash::HashMap;
+use foldhash::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -166,12 +167,15 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
     let mut wtr = Config::new(args.flag_output.as_ref()).writer()?;
     let old_headers = rdr.byte_headers()?;
 
-    let mut headers = csv::StringRecord::from_byte_record_lossy(old_headers.clone());
+    // Lossy decode is needed because safe_header_names operates on StringRecord;
+    // we discard `lossy_headers` after building noquote_headers and write
+    // safe_headers directly in the always/conditional path.
+    let lossy_headers = csv::StringRecord::from_byte_record_lossy(old_headers.clone());
 
     // trim enclosing quotes and spaces from headers as it messes up safenames
     // csv library will automatically add quotes when necessary when we write it
     let mut noquote_headers = csv::StringRecord::new();
-    for header in &headers {
+    for header in &lossy_headers {
         noquote_headers.push_field(header.trim_matches(|c| c == '"' || c == ' '));
     }
 
@@ -179,18 +183,13 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
         &noquote_headers,
         true,
         safenames_mode == SafeNameMode::Conditional,
-        Some(reserved_names_vec).as_ref(),
+        Some(&reserved_names_vec),
         &args.flag_prefix,
         false,
     );
     if let SafeNameMode::Conditional | SafeNameMode::Always = safenames_mode {
-        headers.clear();
-        for header_name in safe_headers {
-            headers.push_field(&header_name);
-        }
-
         // write CSV with safe headers
-        wtr.write_record(headers.as_byte_record())?;
+        wtr.write_record(&safe_headers)?;
         let mut record = csv::ByteRecord::new();
         while rdr.read_byte_record(&mut record)? {
             wtr.write_record(&record)?;
@@ -200,43 +199,51 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
         eprintln!("{changed_count}");
     } else {
         // Verify or VerifyVerbose Mode
+        // Compare each header positionally against its rewritten form so that
+        // headers renamed by the duplicate-suffixing pass (e.g. col1 -> col1_2)
+        // are correctly counted as unsafe — keeps verify counts in sync with
+        // always-mode's changed_count.
         let mut safenames_vec: Vec<String> = Vec::new();
         let mut unsafenames_vec: Vec<String> = Vec::new();
-        let mut checkednames_map: HashMap<String, u16> = HashMap::default();
-        let mut temp_string;
+        let mut seen_safe: HashSet<String> = HashSet::default();
+        let mut counts: HashMap<String, u16> = HashMap::default();
 
-        for header_name in &headers {
-            if safe_headers.contains(&header_name.to_string()) {
-                if !safenames_vec.contains(&header_name.to_string()) {
+        for (i, header_name) in noquote_headers.iter().enumerate() {
+            *counts.entry(header_name.to_string()).or_insert(0) += 1;
+            if safe_headers[i] == header_name {
+                // safe_headers is the positional rewritten-header vector; the
+                // displayed safe-header list is deduped here via seen_safe so
+                // we only show each unchanged safe name once. unsafe_headers
+                // below still records every offending position so the count
+                // matches always-mode's changed_count — hence a duplicated
+                // header (e.g. 5x "col1") shows up once in safe and four times
+                // in unsafe.
+                if seen_safe.insert(header_name.to_string()) {
                     safenames_vec.push(header_name.to_string());
                 }
             } else {
                 unsafenames_vec.push(header_name.to_string());
             }
-
-            temp_string = header_name.to_string();
-            if let Some(count) = checkednames_map.get(&temp_string) {
-                checkednames_map.insert(temp_string, count + 1);
-            } else {
-                checkednames_map.insert(temp_string, 1);
-            }
         }
 
-        let headers_count = headers.len();
-        let dupe_count = checkednames_map.values().filter(|&&v| v > 1).count();
+        let headers_count = noquote_headers.len();
         let unsafe_count = unsafenames_vec.len();
         let safe_count = safenames_vec.len();
 
+        // Sort duplicate entries for deterministic output (HashMap iteration
+        // order is otherwise unstable across runs).
+        let mut dupes: Vec<(String, u16)> = counts.into_iter().filter(|&(_, v)| v > 1).collect();
+        dupes.sort();
+        let dupe_count = dupes.len();
+        let duplicate_headers: Vec<String> =
+            dupes.into_iter().map(|(k, v)| format!("{k}:{v}")).collect();
+
         let safenames_struct = SafeNamesStruct {
-            header_count:      headers_count,
-            duplicate_count:   dupe_count,
-            duplicate_headers: checkednames_map
-                .iter()
-                .filter(|&(_, &v)| v > 1)
-                .map(|(k, v)| format!("{k}:{v}"))
-                .collect(),
-            unsafe_headers:    unsafenames_vec.clone(),
-            safe_headers:      safenames_vec.clone(),
+            header_count: headers_count,
+            duplicate_count: dupe_count,
+            duplicate_headers,
+            unsafe_headers: unsafenames_vec.clone(),
+            safe_headers: safenames_vec.clone(),
         };
         match safenames_mode {
             SafeNameMode::VerifyVerbose => {
@@ -251,14 +258,12 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
                 );
             },
             SafeNameMode::VerifyVerboseJSON | SafeNameMode::VerifyVerbosePrettyJSON => {
-                if safenames_mode == SafeNameMode::VerifyVerbosePrettyJSON {
-                    println!(
-                        "{}",
-                        simd_json::to_string_pretty(&safenames_struct).unwrap()
-                    );
+                let json = if safenames_mode == SafeNameMode::VerifyVerbosePrettyJSON {
+                    simd_json::to_string_pretty(&safenames_struct)?
                 } else {
-                    println!("{}", simd_json::to_string(&safenames_struct).unwrap());
-                }
+                    simd_json::to_string(&safenames_struct)?
+                };
+                println!("{json}");
             },
             _ => eprintln!("{unsafe_count}"),
         }
