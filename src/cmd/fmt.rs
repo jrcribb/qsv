@@ -16,18 +16,21 @@ Usage:
 fmt options:
     -t, --out-delimiter <arg>  The field delimiter for writing CSV data.
                                Must be a single character.
-                               If set to "T", uses tab as the delimiter.
+                               "T" or "\t" can be used as shortcuts for tab.
                                [default: ,]
     --crlf                     Use '\r\n' line endings in the output.
-    --ascii                    Use ASCII field and record separators.
-                               Use Substitute (U+00A1) as the quote character.
-    --quote <arg>              The quote character to use. [default: "]
+    --ascii                    Use ASCII field/record separators: Unit Separator
+                               (U+001F) for fields and Record Separator (U+001E)
+                               for records. Substitute (U+001A) is used as the
+                               quote character.
+    --quote <arg>              The quote character to use. Must be a single
+                               character. [default: "]
     --quote-always             Put quotes around every value.
     --quote-never              Never put quotes around any value.
     --escape <arg>             The escape character to use. When not specified,
                                quotes are escaped by doubling them.
     --no-final-newline         Do not write a newline at the end of the output.
-                               This makes it easier to paste the output into Excel. 
+                               This makes it easier to paste the output into Excel.
 
 Common options:
     -h, --help             Display this message
@@ -35,6 +38,8 @@ Common options:
     -d, --delimiter <arg>  The field delimiter for reading CSV data.
                            Must be a single character. (default: ,)
 "#;
+
+use std::io::Write;
 
 use serde::Deserialize;
 
@@ -91,50 +96,67 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
 
     let mut rdr = rconfig.reader()?;
     let mut wtr = wconfig.writer()?;
-    let mut wsconfig = (wconfig).clone();
 
-    wsconfig.path = Some(
-        tempfile::NamedTempFile::new()?
-            .into_temp_path()
-            .to_path_buf(),
-    );
-
-    let mut temp_writer = wsconfig.writer()?;
-    let mut current_record = csv::ByteRecord::new();
-    let mut next_record = csv::ByteRecord::new();
-    let mut is_last_record;
-    let mut records_exist = rdr.read_byte_record(&mut current_record)?;
-    while records_exist {
-        is_last_record = !rdr.read_byte_record(&mut next_record)?;
-        if is_last_record {
-            // If it's the last record and the --no-final-newline flag is set,
-            // write the record to a temporary file, then read the file into a string.
-            // Remove the last character (the newline) from the string, then write the string to the
-            // output.
-            temp_writer.write_record(&current_record)?;
-            temp_writer.flush()?;
-            let mut temp_string = match std::fs::read_to_string(
-                wsconfig.path.as_ref().ok_or("Temp file path not found")?,
-            ) {
-                Ok(s) => s,
-                Err(e) => return fail_clierror!("Error reading from temp file: {}", e),
-            };
-            if args.flag_no_final_newline {
-                temp_string.pop();
-            }
-            match wtr.into_inner() {
-                Ok(mut writer) => writer.write_all(temp_string.as_bytes())?,
-                Err(e) => return fail_clierror!("Error writing to output: {}", e),
-            }
-            break;
+    // Single-record loop with one record held back as `pending` so the final
+    // record can be handled separately when `--no-final-newline` is set.
+    // mem::swap avoids per-iteration allocations.
+    let mut current = csv::ByteRecord::new();
+    let mut pending = csv::ByteRecord::new();
+    let mut have_pending = false;
+    while rdr.read_byte_record(&mut current)? {
+        if have_pending {
+            wtr.write_record(&pending)?;
         }
-        wtr.write_record(&current_record)?;
-        wtr.write_record(&next_record)?;
-        records_exist = rdr.read_byte_record(&mut current_record)?;
+        std::mem::swap(&mut current, &mut pending);
+        have_pending = true;
     }
 
-    // we don't flush the writer explicitly
-    // because it will cause a borrow error
-    // let's just let it drop and flush itself implicitly
+    if !have_pending {
+        wtr.flush()?;
+        return Ok(());
+    }
+
+    if !args.flag_no_final_newline {
+        wtr.write_record(&pending)?;
+        wtr.flush()?;
+        return Ok(());
+    }
+
+    // --no-final-newline: format the last record into an in-memory buffer using
+    // the *exact same* writer settings (via wconfig.from_writer) so the last
+    // record can never drift from preceding records when wconfig changes.
+    // Strip the trailing terminator, then append the raw bytes to the
+    // underlying output.
+    let mut buf_wtr = wconfig.from_writer(Vec::<u8>::new());
+    buf_wtr.write_record(&pending)?;
+    let mut buf = match buf_wtr.into_inner() {
+        Ok(b) => b,
+        Err(e) => return fail_clierror!("Error buffering final record: {e}"),
+    };
+    // wconfig.from_writer prepends a UTF-8 BOM when QSV_OUTPUT_BOM is set,
+    // but the main writer already emitted one at output start. Gate the
+    // strip on the same env var (not on a content match) so a record whose
+    // first field happens to begin with U+FEFF is preserved verbatim.
+    if util::get_envvar_flag("QSV_OUTPUT_BOM") {
+        debug_assert!(buf.starts_with(b"\xEF\xBB\xBF"));
+        buf.drain(..3);
+    }
+    // Strip the trailing terminator. In wconfig, --ascii's
+    // `.terminator(Any(b'\x1e'))` override is applied after `.crlf(...)`,
+    // so when both flags are set the actual terminator is the 1-byte RS,
+    // not CRLF. term_len is therefore 2 only for --crlf without --ascii.
+    let term_len = if args.flag_crlf && !args.flag_ascii {
+        2
+    } else {
+        1
+    };
+    buf.truncate(buf.len().saturating_sub(term_len));
+
+    let mut inner = match wtr.into_inner() {
+        Ok(w) => w,
+        Err(e) => return fail_clierror!("Error flushing output: {e}"),
+    };
+    inner.write_all(&buf)?;
+    inner.flush()?;
     Ok(())
 }
