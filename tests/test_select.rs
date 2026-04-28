@@ -198,11 +198,44 @@ select_test_err!(select_err_idx_not_int_2, "h1[a]");
 select_test_err!(select_err_unclosed_quote, r#""h1"#);
 select_test_err!(select_err_unclosed_bracket, r#""h1"[1"#);
 select_test_err!(select_err_expected_end_of_field, "a-b-");
+// Regression: a single `/` previously triggered a slice-OOB panic in the
+// regex-delimiter guard (`chars[1..0]`); now it must be a clean parse error.
 select_test_err!(select_err_single_slash, "/");
 select_test_err!(select_err_regex_nomatch, "/nomatch/");
 select_test_err!(select_err_regex_invalid, "/?/");
 select_test_err!(select_err_regex_empty, "//");
 select_test_err!(select_err_regex_triple_slash, "///");
+select_test_err!(select_err_empty_name_bracket, "[5]");
+select_test_err!(select_err_empty_name_leading_comma, ",h1");
+
+#[test]
+fn test_select_quoted_name_with_csv_escape() {
+    // A header value containing a literal `"` is written by the csv crate
+    // as `"foo""bar"` (CSV-style doubled-quote escape). The selector should
+    // accept the same `""` escape and match the un-escaped header value.
+    let wrk = Workdir::new("test_select_quoted_name_with_csv_escape");
+    let data = vec![svec![r#"foo"bar"#, "h2"], svec!["a", "b"]];
+    wrk.create("data.csv", data);
+    let mut cmd = wrk.command("select");
+    cmd.arg("--").arg(r#""foo""bar""#).arg("data.csv");
+    let got: Vec<Vec<String>> = wrk.read_stdout(&mut cmd);
+    let expected = vec![svec![r#"foo"bar"#], svec!["a"]];
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn test_select_quoted_numeric_is_name_not_index() {
+    // Quoting a numeric selector means "the header literally named 1",
+    // not "column 1". With headers [foo, 1], `"1"` must pick column 2.
+    let wrk = Workdir::new("test_select_quoted_numeric_is_name_not_index");
+    let data = vec![svec!["foo", "1"], svec!["a", "b"]];
+    wrk.create("data.csv", data);
+    let mut cmd = wrk.command("select");
+    cmd.arg("--").arg(r#""1""#).arg("data.csv");
+    let got: Vec<Vec<String>> = wrk.read_stdout(&mut cmd);
+    let expected = vec![svec!["1"], svec!["b"]];
+    assert_eq!(got, expected);
+}
 
 fn unsorted_data(headers: bool) -> Vec<Vec<String>> {
     let mut rows = vec![
