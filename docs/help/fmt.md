@@ -37,10 +37,10 @@ qsv fmt --help
 
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Option&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Type | Description | Default |
 |--------|------|-------------|--------|
-| &nbsp;`‑t,`<br>`‑‑out‑delimiter`&nbsp; | string | The field delimiter for writing CSV data. Must be a single character. If set to "T", uses tab as the delimiter. | `,` |
+| &nbsp;`‑t,`<br>`‑‑out‑delimiter`&nbsp; | string | The field delimiter for writing CSV data. Must be a single character. "T" or "\t" can be used as shortcuts for tab. | `,` |
 | &nbsp;`‑‑crlf`&nbsp; | flag | Use '\r\n' line endings in the output. |  |
-| &nbsp;`‑‑ascii`&nbsp; | flag | Use ASCII field and record separators. Use Substitute (U+00A1) as the quote character. |  |
-| &nbsp;`‑‑quote`&nbsp; | string | The quote character to use. | `"` |
+| &nbsp;`‑‑ascii`&nbsp; | flag | Use ASCII field/record separators: Unit Separator (U+001F) for fields and Record Separator (U+001E) for records. Substitute (U+001A) is used as the quote character. |  |
+| &nbsp;`‑‑quote`&nbsp; | string | The quote character to use. Must be a single character. | `"` |
 | &nbsp;`‑‑quote‑always`&nbsp; | flag | Put quotes around every value. |  |
 | &nbsp;`‑‑quote‑never`&nbsp; | flag | Never put quotes around any value. |  |
 | &nbsp;`‑‑escape`&nbsp; | string | The escape character to use. When not specified, quotes are escaped by doubling them. |  |
