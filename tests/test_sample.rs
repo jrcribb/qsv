@@ -2034,3 +2034,319 @@ fn sample_timeseries_adaptive_both() {
         "Should prefer business hours record for Monday"
     );
 }
+
+// =============================================================================
+// Streaming Bernoulli sampling tests (regression coverage for the URL path)
+//
+// These spin up a local actix-web server with hand-built fixture bytes and
+// exercise the boundary detection added in PR #3774:
+//   * RFC-4180 quoted newlines in the header are not split incorrectly.
+//   * --max-size truncation drops any partial trailing record.
+//   * Non-2xx HTTP status fails fast.
+//   * --delimiter is honored on the streaming path.
+// =============================================================================
+
+use std::{sync::mpsc, thread};
+
+use actix_web::{App, HttpResponse, HttpServer, dev::ServerHandle, rt, web};
+use serial_test::serial;
+
+// Single source of truth: the bind host literal and port. Distinct from
+// test_fetch.rs (which uses 8081) so the two suites don't clash when run in
+// parallel across integration-test binaries.
+const SAMPLE_TEST_BIND_HOST: &str = "127.0.0.1";
+const SAMPLE_TEST_PORT: u16 = 8082;
+
+fn sample_test_url(path: &str) -> String {
+    format!("http://{SAMPLE_TEST_BIND_HOST}:{SAMPLE_TEST_PORT}/{path}")
+}
+
+// Header field 0 contains a quoted newline (per RFC 4180). The OLD streaming
+// header parser split on the first raw `\n`, which would land INSIDE the
+// quote and corrupt every subsequent record.
+const QUOTED_NL_HEADER_CSV: &str = "\"first\nline\",second,third\n1,2,3\n4,5,6\n7,8,9\n";
+
+// Tab-delimited fixture for the --delimiter test. With the default-comma
+// parser this would parse as a single-column CSV.
+const TSV_BODY: &str = "id\tname\tcity\n1\talice\tparis\n2\tbob\tlondon\n3\tcarol\trome\n";
+
+// Builds a CSV just over 1 MiB with fixed-size 100-byte records so the
+// --max-size 1 cap (= 1_048_576 bytes) lands deterministically inside a
+// record. Header (`id,payload\n`) is 11 bytes; each data record is exactly
+// 100 bytes (`NNNNN,` + 93 'X' + `\n`). Total ≈ 1.2 MiB.
+fn large_csv_body() -> String {
+    let mut body = String::with_capacity(1_200_100);
+    body.push_str("id,payload\n");
+    let payload: String = "X".repeat(93);
+    for i in 1..=12_000u32 {
+        body.push_str(&format!("{i:05},{payload}\n"));
+    }
+    body
+}
+
+async fn serve_quoted_nl_header() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/csv")
+        .body(QUOTED_NL_HEADER_CSV)
+}
+
+async fn serve_tsv() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/tab-separated-values")
+        .body(TSV_BODY)
+}
+
+async fn serve_large_csv() -> HttpResponse {
+    HttpResponse::Ok()
+        .content_type("text/csv")
+        .body(large_csv_body())
+}
+
+// Channel payload: Ok(handle) on a successful bind, Err(msg) if bind() failed
+// (e.g. "Address already in use"). Sending Result instead of just the handle
+// means a failed bind surfaces a real error to start() instead of leaving the
+// receiver to time out.
+async fn run_sample_webserver(
+    tx: mpsc::Sender<Result<ServerHandle, String>>,
+) -> std::io::Result<()> {
+    let server_builder = HttpServer::new(|| {
+        App::new()
+            .service(web::resource("/quoted_nl_header.csv").to(serve_quoted_nl_header))
+            .service(web::resource("/data.tsv").to(serve_tsv))
+            .service(web::resource("/large.csv").to(serve_large_csv))
+        // anything else -> 404 (handled by actix-web default)
+    });
+
+    let bound = match server_builder.bind((SAMPLE_TEST_BIND_HOST, SAMPLE_TEST_PORT)) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = tx.send(Err(format!("bind failed: {e}")));
+            return Err(e);
+        },
+    };
+
+    let server = bound.run();
+    let _ = tx.send(Ok(server.handle()));
+    server.await
+}
+
+// RAII guard so the server is torn down even if the test panics in the middle
+// (e.g. read_stdout fails). Without this, a panicking test would leave the
+// port bound and cascade into a "Address already in use" on the next #[serial]
+// test, producing confusing follow-on failures.
+struct SampleWebServer {
+    handle: Option<ServerHandle>,
+}
+
+impl SampleWebServer {
+    fn start() -> Self {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let server_future = run_sample_webserver(tx);
+            rt::System::new().block_on(server_future)
+        });
+
+        // recv_timeout (rather than recv) so a failed bind that the server
+        // thread can't surface in time doesn't hang the test forever.
+        match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Ok(handle)) => Self {
+                handle: Some(handle),
+            },
+            Ok(Err(msg)) => panic!("test webserver failed to bind: {msg}"),
+            Err(e) => {
+                panic!("test webserver did not start within 10s ({e:?})")
+            },
+        }
+    }
+}
+
+impl Drop for SampleWebServer {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            // block_on returns whatever stop() returns; we don't care about
+            // errors during teardown — best-effort cleanup.
+            rt::System::new().block_on(handle.stop(true));
+        }
+    }
+}
+
+// Run the command exactly once, assert it succeeded, and return the captured
+// Output so the caller can parse stdout from the same execution. The previous
+// `wrk.assert_success(&mut cmd)` + `wrk.read_stdout(&mut cmd)` pattern ran the
+// process twice — doubling fixture-server requests and meaning the parsed
+// stdout was from a second run, not the one whose status we asserted.
+fn run_and_assert_success(cmd: &mut std::process::Command) -> std::process::Output {
+    let output = cmd.output().expect("failed to execute sample command");
+    assert!(
+        output.status.success(),
+        "sample command failed (status {}):\n--- stderr ---\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+// Parse a captured stdout buffer as CSV (default comma delimiter), preserving
+// the same Vec<Vec<String>> shape that wrk.read_stdout would have produced.
+fn parse_csv_stdout(stdout: &[u8]) -> Vec<Vec<String>> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(stdout);
+    rdr.records()
+        .map(|r| {
+            r.expect("sample stdout was not valid CSV")
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+#[serial]
+fn sample_bernoulli_url_quoted_newline_header() {
+    // RAII guard: server is torn down even if the test panics below.
+    let _server = SampleWebServer::start();
+
+    let wrk = Workdir::new("sample_bernoulli_url_quoted_nl");
+    let mut cmd = wrk.command("sample");
+    cmd.args(["--bernoulli", "--seed", "42"])
+        .arg("0.999")
+        .arg(sample_test_url("quoted_nl_header.csv"));
+
+    // Run once, assert success, and parse stdout from the same execution
+    // — surfaces qsv's stderr on failure and doesn't double-hit the fixture.
+    let output = run_and_assert_success(&mut cmd);
+    let got = parse_csv_stdout(&output.stdout);
+
+    // Header must come through INTACT — three fields, with the embedded
+    // newline preserved in field 0. The old buggy splitter would have
+    // produced one or two fields and shifted every following row.
+    assert!(
+        !got.is_empty(),
+        "no rows emitted (header should always be present)"
+    );
+    let header = &got[0];
+    assert_eq!(
+        header.len(),
+        3,
+        "header should have 3 fields, got {header:?}"
+    );
+    assert_eq!(header[0], "first\nline");
+    assert_eq!(header[1], "second");
+    assert_eq!(header[2], "third");
+
+    // Every data row must also have 3 fields. (Bernoulli at 0.999 with
+    // seed 42 over only three rows may or may not include all of them —
+    // we don't assert on count, only on shape.)
+    for row in &got[1..] {
+        assert_eq!(row.len(), 3, "data row should have 3 fields, got {row:?}");
+    }
+}
+
+#[test]
+#[serial]
+fn sample_bernoulli_url_max_size_truncation() {
+    let _server = SampleWebServer::start();
+
+    let wrk = Workdir::new("sample_bernoulli_url_max_size");
+    let mut cmd = wrk.command("sample");
+    cmd.args(["--bernoulli", "--seed", "42"])
+        .args(["--max-size", "1"])
+        .arg("0.5")
+        .arg(sample_test_url("large.csv"));
+
+    // Single run — the previous double-run pattern doubled the ~1.2 MiB
+    // download AND meant the stdout we parsed was from a different execution
+    // than the one whose status we'd asserted.
+    let output = run_and_assert_success(&mut cmd);
+    let got = parse_csv_stdout(&output.stdout);
+
+    // The cap is 1 MiB = 1_048_576 bytes. Header is 11 bytes; each data
+    // record is 100 bytes. So records 1..=10485 fully fit (ending at byte
+    // 11 + 10485*100 = 1_048_511, well under the cap), but record 10486
+    // would extend to byte 1_048_611 — past the cap. The streaming code
+    // must NOT emit that partial 10486 record.
+    assert!(!got.is_empty(), "no rows emitted");
+    let header = &got[0];
+    assert_eq!(header, &vec!["id".to_string(), "payload".to_string()]);
+
+    let max_id: u32 = got[1..]
+        .iter()
+        .map(|r| {
+            r[0].parse::<u32>()
+                .unwrap_or_else(|_| panic!("bad id row: {r:?}"))
+        })
+        .max()
+        .expect("at least one data row should pass Bernoulli with seed 42 + p=0.5");
+
+    assert!(
+        max_id <= 10485,
+        "saw id {max_id} which is past the --max-size 1 MiB cap (last full record is 10485)"
+    );
+
+    // Every emitted record must be well-formed: 2 fields, 5-digit id,
+    // 93-char payload of 'X'. This catches half-records being flushed at
+    // the cap boundary.
+    for row in &got[1..] {
+        assert_eq!(row.len(), 2, "data row should have 2 fields: {row:?}");
+        assert_eq!(row[0].len(), 5, "id should be 5 chars: {row:?}");
+        assert_eq!(row[1].len(), 93, "payload should be 93 chars: {row:?}");
+        assert!(
+            row[1].chars().all(|c| c == 'X'),
+            "payload should be all 'X': {row:?}"
+        );
+    }
+}
+
+#[test]
+#[serial]
+fn sample_bernoulli_url_404_fails_fast() {
+    let _server = SampleWebServer::start();
+
+    let wrk = Workdir::new("sample_bernoulli_url_404");
+    let mut cmd = wrk.command("sample");
+    cmd.args(["--bernoulli", "--seed", "42"])
+        .arg("0.5")
+        .arg(sample_test_url("does_not_exist.csv"));
+
+    // .error_for_status() should turn the 404 into an Err in the streaming
+    // path, so qsv exits with non-zero. Without that, the HTML 404 body
+    // would be fed straight into the csv parser.
+    wrk.assert_err(&mut cmd);
+}
+
+#[test]
+#[serial]
+fn sample_bernoulli_url_custom_delimiter() {
+    let _server = SampleWebServer::start();
+
+    let wrk = Workdir::new("sample_bernoulli_url_tsv");
+    let mut cmd = wrk.command("sample");
+    cmd.args(["--bernoulli", "--seed", "42"])
+        .args(["--delimiter", "\t"])
+        .arg("0.999")
+        .arg(sample_test_url("data.tsv"));
+
+    // qsv's writer also honors --delimiter, so output is tab-separated.
+    // read_stdout()'s CSV parser would treat that as a single comma-field, so
+    // we parse the raw stdout with tab delimiter ourselves. Run once.
+    let output = run_and_assert_success(&mut cmd);
+    let stdout = String::from_utf8(output.stdout).expect("sample stdout must be valid UTF-8");
+
+    let got: Vec<Vec<&str>> = stdout.lines().map(|l| l.split('\t').collect()).collect();
+
+    // With --delimiter '\t' honored on the streaming path, fields split into
+    // 3 columns. Without the fix the streaming parser would treat the whole
+    // row as one comma-field and the writer would emit a single-column CSV.
+    assert!(!got.is_empty(), "no rows emitted");
+    assert_eq!(
+        got[0],
+        vec!["id", "name", "city"],
+        "TSV header should split into 3 fields when --delimiter '\\t' is honored"
+    );
+    for row in &got[1..] {
+        assert_eq!(row.len(), 3, "TSV data row should have 3 fields: {row:?}");
+    }
+}
