@@ -731,9 +731,7 @@ async fn stream_bernoulli_sampling(uri: &str, args: &Args, rng_kind: &RngKind) -
     let delim_byte = if let Some(d) = args.flag_delimiter {
         d.as_byte()
     } else if let Ok(delim) = std::env::var("QSV_DEFAULT_DELIMITER") {
-        Delimiter::decode_delimiter(&delim)
-            .map(|d| d.as_byte())
-            .unwrap_or(b',')
+        Delimiter::decode_delimiter(&delim).map_or(b',', super::super::config::Delimiter::as_byte)
     } else {
         b','
     };
@@ -815,7 +813,7 @@ async fn stream_bernoulli_sampling(uri: &str, args: &Args, rng_kind: &RngKind) -
                 .delimiter(delim_byte)
                 .from_reader(&buffer[..]);
             let mut hdr = csv::ByteRecord::new();
-            if let Ok(true) = probe.read_byte_record(&mut hdr) {
+            if matches!(probe.read_byte_record(&mut hdr), Ok(true)) {
                 let pos = probe.position().byte() as usize;
                 // A record terminator was definitely inside the buffer iff the
                 // parser stopped before consuming all of it. (Or the stream is
@@ -838,7 +836,7 @@ async fn stream_bernoulli_sampling(uri: &str, args: &Args, rng_kind: &RngKind) -
                 .delimiter(delim_byte)
                 .from_reader(&buffer[..]);
             let mut last_consumed = 0usize;
-            while let Ok(true) = probe.read_byte_record(&mut record) {
+            while matches!(probe.read_byte_record(&mut record), Ok(true)) {
                 let pos = probe.position().byte() as usize;
                 if !parser_eof && pos == buffer.len() {
                     // Parser ate the rest of the buffer — this last "record"
@@ -1169,7 +1167,7 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
                 let sample_count = sample_size as usize;
                 let total_count = idx.count().try_into().unwrap();
 
-                log::info!("doing {:?} INDEXED sampling...", rng_kind);
+                log::info!("doing {rng_kind:?} INDEXED sampling...");
                 with_rng!(&rng_kind, args.flag_seed, |rng| {
                     sample_indices(&mut rng, total_count, sample_count, |i| {
                         idx.seek(i as u64)?;
@@ -1525,7 +1523,7 @@ fn sample_weighted<R: io::Read, W: io::Write>(
     // Second pass: acceptance-rejection sampling
     let mut rdr2 = rconfig.reader()?;
 
-    log::info!("doing {:?} WEIGHTED sampling...", rng_kind);
+    log::info!("doing {rng_kind:?} WEIGHTED sampling...");
     with_rng!(rng_kind, seed, |rng| {
         do_weighted_sampling(
             &mut rdr2.byte_records(),

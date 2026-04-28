@@ -144,6 +144,8 @@ impl SelectorParser {
     }
 
     fn parse_one(&mut self) -> Result<OneSelector, String> {
+        const FIRST_OCCURRENCE: usize = 0;
+
         let (name, quoted) = if self.cur() == Some('"') {
             self.bump();
             (self.parse_quoted_name()?, true)
@@ -165,7 +167,6 @@ impl SelectorParser {
         // which also defaults to the first occurrence when the header name
         // is not numeric (see `IndexedName(name, FIRST_OCCURRENCE)` in the
         // `Err` arm).
-        const FIRST_OCCURRENCE: usize = 0;
         Ok(if self.cur() == Some('[') {
             let idx = self.parse_index()?;
             OneSelector::IndexedName(name, idx)
