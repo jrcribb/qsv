@@ -18,23 +18,27 @@ incremental identifier starting at 1000 and incrementing by 5:
 
 If run on the following CSV data:
 
-    Name,Color
-    Mary,yellow
-    John,blue
-    Mary,purple
-    Sue,orange
-    John,magenta
-    Mary,cyan
+```csv
+Name,Color
+Mary,yellow
+John,blue
+Mary,purple
+Sue,orange
+John,magenta
+Mary,cyan
+```
 
  will replace the value of the "Name" column with the following values:
 
-    Name,Color
-    ID-1000,yellow
-    ID-1005,blue
-    ID-1000,purple
-    ID-1010,orange
-    ID-1005,magenta
-    ID-1000,cyan
+ ```csv
+Name,Color
+ID-1000,yellow
+ID-1005,blue
+ID-1000,purple
+ID-1010,orange
+ID-1005,magenta
+ID-1000,cyan
+```
 
 For more examples, see https://github.com/dathere/qsv/blob/master/tests/test_pseudo.rs.
 
