@@ -169,7 +169,7 @@ fn sort_csv(
         }
         let idx_position = curr_row.position().unwrap();
 
-        writeln!(line_wtr, "{sort_key}|{:01$}", idx_position.line(), width)?;
+        writeln!(line_wtr, "{sort_key}|{:01$}", idx_position.record(), width)?;
     }
     line_wtr.flush()?;
     drop(line_wtr);
@@ -219,13 +219,15 @@ fn sort_csv(
 
     let mut sorted_csv_wtr = Config::new(args.arg_output.as_ref()).writer()?;
 
-    let position_delta: u64 = if args.flag_no_headers {
-        1
-    } else {
+    // idx_position.record() is always a 0-based count of records read.
+    // When headers are present, the header row is record 0, so the first data
+    // record is 1; without headers, the first data record is 0. Subtract 1
+    // only in the headered case to get the 0-based seek key for data records.
+    let position_delta: u64 = u64::from(!args.flag_no_headers);
+    if !args.flag_no_headers {
         // Write the header row if --no-headers is false
         sorted_csv_wtr.write_byte_record(&headers)?;
-        2
-    };
+    }
 
     // amortize allocations
     let mut record_wrk = csv::ByteRecord::new();
