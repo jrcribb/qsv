@@ -326,6 +326,7 @@ serial_test = { version = "3.4", features = ["file_locks"] }
 # create single `DfaTransition` struct, reducing lookup by 1 in hot `get_output` path.
 # replaced 8-way unrolled table lookup in `needs_quotes` with memchr-based SIMD scanning;
 # derive Copy for `Position`, eliminating clone overhead;
+# short-input bypass in scan_and_copy to avoid DFA overhead for short fields;
 # and various clippy lint suggestions applied
 csv       = { git = "https://github.com/dathere/rust-csv", branch = "qsv-tuned" }
 csv-core  = { git = "https://github.com/dathere/rust-csv", branch = "qsv-tuned" }
