@@ -44,15 +44,16 @@ input options:
                               NonNumeric: Quotes all fields that are non-numeric.
                               Never: Never write quotes. Even if it produces invalid CSV.
                              [default: necessary]
-    --skip-lines <arg>       The number of preamble lines to skip.
-    --auto-skip              Sniffs a CSV for preamble lines and automatically
+    --skip-lines <arg>       The number of preamble CSV records to skip.
+    --auto-skip              Sniffs a CSV for preamble records and automatically
                              skips them. Takes precedence over --skip-lines option.
                              Does not work with <stdin>.
-    --skip-lastlines <arg>   The number of epilogue lines to skip.
+    --skip-lastlines <arg>   The number of epilogue CSV records to skip.
     --trim-headers           Trim leading & trailing whitespace & quotes from header values.
     --trim-fields            Trim leading & trailing whitespace from field values.
-    --comment <char>         The comment character to use. When set, lines
-                             starting with this character will be skipped.
+    --comment <char>         The comment character to use (single-byte; only the
+                             first byte of the UTF-8 encoding is matched). When set,
+                             lines starting with this byte will be skipped.
     --encoding-errors <arg>  How to handle UTF-8 encoding errors.
                              Possible values: replace, skip, strict.
                                replace: Replace invalid UTF-8 sequences with �.
@@ -124,15 +125,26 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
     };
 
     if args.flag_auto_skip {
+        if matches!(args.arg_input.as_deref(), None | Some("-")) {
+            return fail_incorrectusage_clierror!("--auto-skip does not work with <stdin>.");
+        }
         // safety: we are in single-threaded code.
         unsafe { std::env::set_var("QSV_SNIFF_PREAMBLE", "1") };
     }
 
-    let comment_char: Option<u8> = if let Ok(cmt_char) = env::var("QSV_COMMENT_CHAR") {
-        Some(cmt_char.as_bytes().first().unwrap().to_owned())
-    } else {
-        args.flag_comment.map(|char| char as u8)
-    };
+    // Take the first UTF-8 byte for both env-var and flag paths so the two
+    // sources behave identically. `c as u8` would truncate the Unicode scalar
+    // (e.g. 'é' (U+00E9) → 0xE9), which differs from the env-var path's first
+    // UTF-8 byte (0xC3 for 'é') and would silently mismatch.
+    let comment_char: Option<u8> = env::var("QSV_COMMENT_CHAR")
+        .ok()
+        .and_then(|s| s.as_bytes().first().copied())
+        .or_else(|| {
+            args.flag_comment.map(|c| {
+                let mut buf = [0u8; 4];
+                c.encode_utf8(&mut buf).as_bytes()[0]
+            })
+        });
 
     let mut rconfig = Config::new(args.arg_input.as_ref())
         .delimiter(args.flag_delimiter)
@@ -170,6 +182,7 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
         rconfig = rconfig.flexible(true);
     }
 
+    let skip_lastlines_active = args.flag_skip_lastlines.is_some();
     let mut total_lines = if let Some(skip_llines) = args.flag_skip_lastlines {
         // use the regular count_rows to get the row_count
         // as Polars doesn't support skipping last lines
@@ -179,7 +192,7 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
                 "--skip-lastlines: {skip_llines} is greater than row_count: {row_count}."
             );
         }
-        info!("Set to skip last {skip_llines} lines...");
+        info!("Set to skip last {skip_llines} records...");
         row_count.saturating_sub(skip_llines)
     } else {
         0_u64
@@ -205,9 +218,7 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
         for _i in 1..=preamble_rows {
             rdr.read_byte_record(&mut row)?;
         }
-        if total_lines.saturating_sub(preamble_rows) > 0 {
-            total_lines -= preamble_rows;
-        }
+        total_lines = total_lines.saturating_sub(preamble_rows);
     }
     // the first rdr record is the header, since we have no_headers = true.
     // If trim_setting is equal to Headers or All, we "manually" trim the first record
@@ -221,6 +232,11 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
             str_row.push_field(String::from_utf8_lossy(field).trim_matches('"'));
         }
         wtr.write_record(&str_row)?;
+        // The header was consumed/written outside the main loop. The loop's
+        // cutoff counts only records read inside the loop, so subtract 1 from
+        // total_lines to keep --skip-lastlines accurate. Unconditional because
+        // total_lines is only consulted when skip_lastlines_active is true.
+        total_lines = total_lines.saturating_sub(1);
     }
 
     let mut idx = 1_u64;
@@ -229,6 +245,12 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
     let debug_log = log::log_enabled!(log::Level::Debug);
 
     'main: loop {
+        // Check the cutoff before reading the next record. Checking before the
+        // write avoids the boundary case where total_lines == 0 means "stop now"
+        // but a post-write check would still emit one record.
+        if skip_lastlines_active && idx > total_lines {
+            break 'main;
+        }
         match rdr.read_byte_record(&mut row) {
             Ok(moredata) => {
                 if !moredata {
@@ -273,10 +295,6 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
         }
         wtr.write_record(&str_row)?;
         idx += 1;
-
-        if total_lines > 0 && idx > total_lines {
-            break 'main;
-        }
     }
 
     if not_utf8 {
@@ -288,8 +306,8 @@ pub fn run(argv: &[&str]) -> CliResult<()> {
             EncodingHandling::Skip => warn!(
                 "Some fields contained invalid UTF-8 sequences. These fields set to \"<SKIPPED>\"."
             ),
-            // STRICT is unreachable because we return early if we encounter invalid UTF-8
-            EncodingHandling::Strict => unreachable!(),
+            // Strict returns early on invalid UTF-8, so not_utf8 is never true here.
+            EncodingHandling::Strict => {},
         }
     }
 
