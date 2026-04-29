@@ -30,7 +30,7 @@ Mary,cyan
 
  will replace the value of the "Name" column with the following values:
 
- ```csv
+```csv
 Name,Color
 ID-1000,yellow
 ID-1005,blue
