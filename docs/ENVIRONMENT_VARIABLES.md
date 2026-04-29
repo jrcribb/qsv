@@ -24,7 +24,7 @@
 | `QSV_NO_UPDATE` | if set, prohibit self-update version check for the latest qsv release published on GitHub. |
 | `QSV_LLM_BASE_URL` | The LLM API URL to use with the `describegpt` command. |
 | `QSV_LLM_APIKEY` | The API key of the supported LLM service to use with the `describegpt` command. |
-| `QSV_LLM_MODEL` | The LLM Model to use with the `describegpt` command. |
+| `QSV_LLM_MODEL` | The LLM Model to use with the `describegpt` command (e.g. openai/gpt-oss-20b, openai/gpt-oss-120b, google/gemma-4-31b, google/gemma-4-e4b). |
 | `QSV_DUCKDB_PATH` | The fully qualified path to the DuckDB binary. In `describegpt`, when set, DuckDB is used instead of the default Polars SQL engine and all loaded DuckDB extensions are sent as additional context to the LLM. In `scoresql`, the `--duckdb` flag is required to use DuckDB; the env var only supplies the binary path (if unset, `scoresql` looks for `duckdb` in PATH). |
 | `QSV_TEST_DESCRIBEGPT` | If set, enables `describegpt` command tests. Requires LM Studio with openai/gpt-oss-20b model loaded. |
 | `QSV_OUTPUT_BOM` | if set, the output will have a Byte Order Mark (BOM) at the beginning. This is used to generate Excel-friendly CSVs on Windows. |
