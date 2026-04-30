@@ -5,7 +5,7 @@
 **[Table of Contents](TableOfContents.md)** | **Source: [src/cmd/stats.rs](https://github.com/dathere/qsv/blob/master/src/cmd/stats.rs)** | [📇](TableOfContents.md#legend "uses an index when available.")[🤯](TableOfContents.md#legend "loads entire CSV into memory, though `dedup`, `stats` & `transpose` have \"streaming\" modes as well.")[🏎️](TableOfContents.md#legend "multithreaded and/or faster when an index (📇) is available.")[👆](TableOfContents.md#legend "has powerful column selector support. See `select` for syntax.")[🪄](TableOfContents.md#legend "\"automagical\" commands that uses stats and/or frequency tables to work \"smarter\" & \"faster\".")
 
 <a name="nav"></a>
-[Description](#description) | [Examples](#examples) | [Usage](#usage) | [Stats Options](#stats-options) | [Boolean Inferencing Options](#boolean-inferencing-options) | [Numeric & Date/Datetime Stats That Require In-memory Sorting Options](#numeric-&-date/datetime-stats-that-require-in-memory-sorting-options) | [Date Inferencing Options](#date-inferencing-options) | [Common Options](#common-options)
+[Description](#description) | [Examples](#examples) | [Usage](#usage) | [Stats Options](#stats-options) | [Boolean Inferencing Options](#boolean-inferencing-options) | [Numeric & Date/Datetime Stats That Require In-Memory Sorting Options](#numeric-&-date/datetime-stats-that-require-in-memory-sorting-options) | [Date Inferencing Options](#date-inferencing-options) | [Common Options](#common-options)
 
 <a name="description"></a>
 
@@ -31,7 +31,7 @@ cardinality/uniqueness ratio, mode/s & "antimode/s" & percentiles.
 
 Note that some stats require loading the entire file into memory, so they must be enabled explicitly.
 
-By default, the following "streaming" statistics are reported for *every* column:
+By default, the following "streaming" statistics are reported for *every* column:  
 sum, min/max/range values, sort order/"sortiness", min/max/sum/avg/stddev/variance/cv length, mean, sem,
 geometric_mean, harmonic_mean,stddev, variance, cv, nullcount, n_negative, n_zero, n_positive,
 max_precision & sparsity.
@@ -39,7 +39,7 @@ max_precision & sparsity.
 The default set of statistics corresponds to ones that can be computed efficiently on a stream of data
 (i.e., constant memory) and works with arbitrarily large CSVs.
 
-The following additional "non-streaming, advanced" statistics require loading the entire file into memory:
+The following additional "non-streaming, advanced" statistics require loading the entire file into memory:  
 cardinality/uniqueness ratio, modes/antimodes, median, MAD, quartiles and its related measures
 (q1, q2, q3, IQR, lower/upper fences & skewness) and percentiles.
 
@@ -178,7 +178,7 @@ qsv stats -E --cache-threshold -5000005 nyc311.csv
 For more examples, see [tests](https://github.com/dathere/qsv/tree/master/resources/test).
 
 If the polars feature is enabled, support additional tabular file formats and
-compression formats:
+compression formats:  
 ```console
 qsv stats data.parquet // Parquet
 ```
@@ -241,7 +241,7 @@ qsv stats --help
 
 <a name="numeric-&-date/datetime-stats-that-require-in-memory-sorting-options"></a>
 
-## Numeric & Date/Datetime Stats That Require In-memory Sorting Options [↩](#nav)
+## Numeric & Date/Datetime Stats That Require In-Memory Sorting Options [↩](#nav)
 
 | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Option&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Type | Description | Default |
 |--------|------|-------------|--------|
